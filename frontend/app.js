@@ -1,9 +1,10 @@
 // ==============================
-// MIRA Agent Web (Base)
+// MIRA Agent Web (Paso 2 - Cloud Brain via Groq backend)
 // - Chat UI
 // - Task window
-// - Agent states (stub)
-// - Voice toggle (stub; Paso 2 lo vuelve real)
+// - Agent states
+// - Voice (WebSpeech)
+// - Backend connection (Render) ✅
 // ==============================
 
 const messagesEl = document.getElementById("messages");
@@ -25,8 +26,14 @@ const pauseBtn = document.getElementById("pauseBtn");
 const resumeBtn = document.getElementById("resumeBtn");
 const takeOverBtn = document.getElementById("takeOverBtn");
 
-// ---- Agent session memory (v1: session only) ----
-let chatHistory = []; // [{role:'user'|'assistant', content:'...'}]
+// ✅ Tu backend Render
+const BACKEND_URL = "https://mira-agent.onrender.com";
+
+// ---- Session (memoria por sesión en backend) ----
+const sessionId = localStorage.getItem("mira_session_id") || crypto.randomUUID();
+localStorage.setItem("mira_session_id", sessionId);
+
+// ---- Voice ----
 let voiceEnabled = true;
 
 // ---- Agent states ----
@@ -78,7 +85,6 @@ function addMessage(text, who = "mira") {
 }
 
 function sanitizeHTML(str) {
-  // Básico para evitar HTML inyectado
   return String(str)
     .replaceAll("&", "&amp;")
     .replaceAll("<", "&lt;")
@@ -87,65 +93,152 @@ function sanitizeHTML(str) {
     .replaceAll("'", "&#039;");
 }
 
-// ============ Voice (stub) ============
+// ===== Typing indicator =====
+function showTyping(on) {
+  const id = "typing";
+  let el = document.getElementById(id);
+
+  if (on) {
+    if (!el) {
+      el = document.createElement("div");
+      el.id = id;
+      el.className = "message mira";
+      el.innerHTML = "MIRA está escribiendo…";
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = "MIRA";
+      el.appendChild(meta);
+      messagesEl.appendChild(el);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
+  } else {
+    if (el) el.remove();
+  }
+}
+
+// ============ Voice (WebSpeech) ============
+function stripDoNotRead(text) {
+  // Quita bloques de código, inline code y LaTeX simple para que no lo lea en voz
+  return String(text)
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`[^`]*`/g, "")
+    .replace(/\$\$[\s\S]*?\$\$/g, "")
+    .replace(/\$[^$]*\$/g, "")
+    .replace(/\{\{[\s\S]*?\}\}/g, "")
+    .trim();
+}
+
 function speak(text) {
   if (!voiceEnabled) return;
-  // Paso 2: aquí conectamos un TTS real (cloud o WebSpeech)
-  // Por ahora dejamos el "hook" listo.
-  // console.log("[VOICE]", text);
+  if (!("speechSynthesis" in window)) return;
+
+  const clean = stripDoNotRead(text);
+  if (!clean) return;
+
+  // Cancela lo anterior para evitar “dos voces”
+  window.speechSynthesis.cancel();
+
+  const u = new SpeechSynthesisUtterance(clean);
+  u.lang = "es-CL";
+  u.rate = 1.02;
+
+  window.speechSynthesis.speak(u);
 }
 
 function toggleVoice() {
   voiceEnabled = !voiceEnabled;
   toggleVoiceBtn.textContent = voiceEnabled ? "🔊 Voz" : "🔇 Voz";
   addMessage(voiceEnabled ? "Voz activada." : "Voz desactivada.", "mira");
+  speak(voiceEnabled ? "Voz activada." : "Voz desactivada.");
 }
 
-// ============ Agent stub logic ============
+// ============ Agent heuristics ============
 function looksLikeTask(userText) {
   const t = userText.toLowerCase();
-  const verbs = ["abre", "buscar", "busca", "rellena", "completa", "envía", "manda", "descarga", "sube", "publica", "crea"];
+  const verbs = [
+    "abre", "abrir",
+    "buscar", "busca",
+    "rellena", "rellenar",
+    "completa", "completar",
+    "envía", "enviar",
+    "manda", "mandar",
+    "descarga", "descargar",
+    "sube", "subir",
+    "publica", "publicar",
+    "crea", "crear"
+  ];
   return verbs.some(v => t.includes(v));
 }
 
-function agentRespond(userText) {
-  // Paso 2: aquí se conecta el cerebro cloud (modelo IA).
-  // Por ahora: comportamiento mínimo y controlado.
-  if (looksLikeTask(userText)) {
-    openTaskWindow();
-    setState(AgentState.PLANNING, "Armando un plan corto…");
-    logTask("📌 Entendí que es una tarea accionable.");
-    logTask("🧩 (Stub) En el Paso 2 esto se reemplaza por el plan real del modelo IA.");
-    setTimeout(() => {
-      setState(AgentState.WAITING_USER, "Lista para comenzar cuando confirmes.");
-      logTask("✅ Plan de ejemplo: 1) Abrir sitio 2) Buscar 3) Resumir");
-      logTask("🔒 Si aparece login, tú ingresas las credenciales.");
-      addMessage("Entendido. Puedo ejecutar esa tarea en la web. En el Paso 2, mi cerebro cloud planificará y actuará de verdad. ¿Quieres que lo haga ahora (cuando tengamos el cerebro conectado)?", "mira");
-      speak("Entendido. ¿Quieres que lo haga ahora?");
-    }, 700);
-  } else {
-    setState(AgentState.IDLE, "Conversando…");
-    addMessage("Te entiendo. Por ahora soy la base web de MIRA. En el Paso 2 voy a responder como un agente real con cerebro cloud.", "mira");
-    speak("Te entiendo. En el paso dos responderé como un agente real con cerebro cloud.");
+// ============ Backend ============
+async function callBackend(userText) {
+  const r = await fetch(`${BACKEND_URL}/api/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, userText }),
+  });
+
+  if (!r.ok) {
+    let msg = "Backend error";
+    try {
+      const data = await r.json();
+      msg = data?.error || msg;
+    } catch {}
+    throw new Error(msg);
   }
+
+  return await r.json(); // { assistantText, model? }
 }
 
-// ============ Events ============
-function sendMessage() {
+// ============ Main send ============
+async function sendMessage() {
   const text = inputEl.value.trim();
   if (!text) return;
 
   addMessage(text, "user");
-  chatHistory.push({ role: "user", content: text });
-
   inputEl.value = "";
 
-  // Simulación de “thinking…”
-  setTimeout(() => {
-    agentRespond(text);
-  }, 350);
+  // Estado UI
+  setState(AgentState.IDLE, "Conversando…");
+  showTyping(true);
+
+  // Si parece tarea, abrimos panel y registramos intención
+  if (looksLikeTask(text)) {
+    openTaskWindow();
+    setState(AgentState.PLANNING, "Analizando tarea…");
+    logTask("📌 Detecté una posible tarea accionable.");
+    logTask("🔒 Si aparece login, tú ingresas credenciales manualmente.");
+  }
+
+  try {
+    const data = await callBackend(text);
+    showTyping(false);
+
+    const reply = data.assistantText || "No pude responder.";
+    addMessage(reply, "mira");
+    speak(reply);
+
+    // Si la conversación deriva en tarea, mantenemos el panel listo
+    if (looksLikeTask(text)) {
+      setState(AgentState.WAITING_USER, "Lista para comenzar (modo web).");
+      logTask("✅ Respuesta del cerebro cloud recibida.");
+      logTask("🧠 Próximo: agregamos herramientas reales para ejecutar acciones web.");
+    } else {
+      setState(AgentState.IDLE, "Lista para trabajar.");
+    }
+
+  } catch (e) {
+    showTyping(false);
+    setState(AgentState.RECOVERING, "Problema de conexión.");
+    addMessage(
+      "Tuve un problema conectando con el servidor. Revisa que el backend esté activo en Render y que la URL sea correcta.",
+      "mira"
+    );
+    logTask("⚠ Error conectando al backend: " + (e?.message || "desconocido"));
+  }
 }
 
+// ============ Events ============
 sendBtn.addEventListener("click", sendMessage);
 inputEl.addEventListener("keydown", (e) => {
   if (e.key === "Enter") sendMessage();
@@ -154,20 +247,13 @@ inputEl.addEventListener("keydown", (e) => {
 newChatBtn.addEventListener("click", () => {
   messagesEl.innerHTML = "";
   taskLogEl.innerHTML = "";
-  chatHistory = [];
   setState(AgentState.IDLE, "Lista para trabajar.");
-  addMessage("Hola, soy MIRA. Dime qué quieres hacer hoy.", "mira");
-  speak("Hola, soy MIRA. Dime qué quieres hacer hoy.");
+  addMessage("Hola, soy MIRA. Ya tengo cerebro cloud conectado. Dime qué hacemos.", "mira");
+  speak("Hola, soy MIRA. Ya tengo cerebro cloud conectado. Dime qué hacemos.");
 });
 
-openTaskBtn.addEventListener("click", () => {
-  openTaskWindow();
-});
-
-closeTaskBtn.addEventListener("click", () => {
-  closeTaskWindow();
-});
-
+openTaskBtn.addEventListener("click", () => openTaskWindow());
+closeTaskBtn.addEventListener("click", () => closeTaskWindow());
 toggleVoiceBtn.addEventListener("click", toggleVoice);
 
 pauseBtn.addEventListener("click", () => {
@@ -179,7 +265,7 @@ resumeBtn.addEventListener("click", () => {
   logTask("▶ Continuar solicitado por el usuario.");
   setState(AgentState.EXECUTING, "Reanudando…");
   setTimeout(() => setState(AgentState.OBSERVING, "Verificando resultados…"), 600);
-  setTimeout(() => setState(AgentState.DONE, "Tarea lista (stub)."), 1200);
+  setTimeout(() => setState(AgentState.DONE, "Listo. (Modo conversación + backend OK)"), 1200);
 });
 
 takeOverBtn.addEventListener("click", () => {
@@ -189,8 +275,7 @@ takeOverBtn.addEventListener("click", () => {
   speak("Perfecto. Tú tomas el control. Te guío paso a paso.");
 });
 
-// Initial greeting
+// ============ Initial greeting ============
 setState(AgentState.IDLE, "Lista para trabajar.");
-addMessage("Hola, soy <strong>MIRA</strong>. Puedo conversar contigo y ejecutar tareas en la web en modo seguro. 👋", "mira");
-speak("Hola, soy MIRA. Estoy lista para trabajar contigo.");
-
+addMessage("Hola, soy <strong>MIRA</strong>. Ya tengo <u>cerebro cloud</u> conectado. 👋", "mira");
+speak("Hola, soy MIRA. Ya tengo cerebro cloud conectado.");
