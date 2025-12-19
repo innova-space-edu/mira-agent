@@ -1,6 +1,7 @@
 import express from "express";
 import cors from "cors";
 import OpenAI from "openai";
+import { chromium } from "playwright";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -73,7 +74,7 @@ function stripHtmlToText(html) {
 const toolLog = new Map();   // sessionId -> array logs
 const planStore = new Map(); // sessionId -> plan object
 
-// ✅ NUEVO: acciones para el frontend (copiloto)
+// ✅ acciones para el frontend (copiloto)
 const actionStore = new Map(); // sessionId -> actions[]
 function pushAction(sessionId, action) {
   if (!actionStore.has(sessionId)) actionStore.set(sessionId, []);
@@ -133,7 +134,7 @@ const tools = [
       }
     }
   },
-  // ✅ NUEVO: tool copiloto (abrir URL en el frontend)
+  // ✅ tool copiloto (abrir URL en el frontend)
   {
     type: "function",
     function: {
@@ -188,7 +189,6 @@ async function runTool(sessionId, toolCall) {
     const contentType = resp.headers.get("content-type") || "";
     const status = resp.status;
 
-    // Solo procesamos texto/html o texto plano
     const raw = await resp.text();
     const text = stripHtmlToText(raw);
     const clipped = text.slice(0, maxChars);
@@ -204,7 +204,7 @@ async function runTool(sessionId, toolCall) {
     };
   }
 
-  // ✅ NUEVO: open_url (solo genera acción para el frontend)
+  // ✅ open_url (solo genera acción para el frontend)
   if (name === "open_url") {
     const url = args.url;
     pushToolLog(sessionId, `🪟 Abrir URL solicitada: ${url}`);
@@ -215,6 +215,63 @@ async function runTool(sessionId, toolCall) {
   // Tool desconocida
   pushToolLog(sessionId, `⚠ Tool desconocida: ${name}`);
   return { error: "Unknown tool" };
+}
+
+// --------------------
+// Playwright Browser Manager (Control real)
+// --------------------
+const browserSessions = new Map();
+// sessionId -> { browser, context, page, viewport, lastShotBase64, lastUrl }
+
+async function getOrCreateBrowser(sessionId) {
+  if (browserSessions.has(sessionId)) return browserSessions.get(sessionId);
+
+  const browser = await chromium.launch({
+    headless: true,
+    args: [
+      "--no-sandbox",
+      "--disable-dev-shm-usage",
+      "--disable-blink-features=AutomationControlled"
+    ]
+  });
+
+  const viewport = { width: 1280, height: 720 };
+
+  const context = await browser.newContext({
+    viewport,
+    userAgent:
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
+  });
+
+  const page = await context.newPage();
+
+  const obj = {
+    browser,
+    context,
+    page,
+    viewport,
+    lastShotBase64: "",
+    lastUrl: ""
+  };
+
+  browserSessions.set(sessionId, obj);
+  return obj;
+}
+
+async function safeScreenshot(sessionId) {
+  const s = await getOrCreateBrowser(sessionId);
+  const buf = await s.page.screenshot({ type: "png" });
+  const b64 = buf.toString("base64");
+  s.lastShotBase64 = b64;
+  return b64;
+}
+
+async function closeBrowserSession(sessionId) {
+  const s = browserSessions.get(sessionId);
+  if (!s) return;
+  try { await s.context?.close(); } catch {}
+  try { await s.browser?.close(); } catch {}
+  browserSessions.delete(sessionId);
 }
 
 // --------------------
@@ -253,8 +310,123 @@ IMPORTANTE:
 - No inventes contenido de páginas: si no lo sabes, pide URL o usa web_fetch.
 `;
 
-app.get("/", (_, res) => res.send("MIRA backend (Groq + Planner + Tools + Copilot) OK ✅"));
+// --------------------
+// Basic routes
+// --------------------
+app.get("/", (_, res) => res.send("MIRA backend (Groq + Planner + Tools + Copilot + Playwright) OK ✅"));
 
+// --------------------
+// Browser API (Real control)
+// --------------------
+app.post("/api/browser/start", async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: "Falta sessionId" });
+
+    const s = await getOrCreateBrowser(sessionId);
+    const shot = await safeScreenshot(sessionId);
+
+    res.json({ ok: true, viewport: s.viewport, screenshotBase64: shot });
+  } catch (e) {
+    console.error("browser/start", e);
+    res.status(500).json({ error: "Error iniciando navegador" });
+  }
+});
+
+app.post("/api/browser/goto", async (req, res) => {
+  try {
+    const { sessionId, url } = req.body || {};
+    if (!sessionId || !url) return res.status(400).json({ error: "Falta sessionId o url" });
+
+    const s = await getOrCreateBrowser(sessionId);
+    await s.page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    s.lastUrl = url;
+
+    const shot = await safeScreenshot(sessionId);
+    res.json({ ok: true, screenshotBase64: shot });
+  } catch (e) {
+    console.error("browser/goto", e);
+    res.status(500).json({ error: "Error navegando" });
+  }
+});
+
+app.get("/api/browser/screenshot", async (req, res) => {
+  try {
+    const sessionId = req.query.sessionId;
+    if (!sessionId) return res.status(400).json({ error: "Falta sessionId" });
+
+    const shot = await safeScreenshot(sessionId);
+    res.json({ ok: true, screenshotBase64: shot });
+  } catch (e) {
+    console.error("browser/screenshot", e);
+    res.status(500).json({ error: "Error screenshot" });
+  }
+});
+
+app.post("/api/browser/click", async (req, res) => {
+  try {
+    const { sessionId, x, y } = req.body || {};
+    if (!sessionId || x == null || y == null) return res.status(400).json({ error: "Falta sessionId/x/y" });
+
+    const s = await getOrCreateBrowser(sessionId);
+    await s.page.mouse.click(Number(x), Number(y));
+
+    const shot = await safeScreenshot(sessionId);
+    res.json({ ok: true, screenshotBase64: shot });
+  } catch (e) {
+    console.error("browser/click", e);
+    res.status(500).json({ error: "Error click" });
+  }
+});
+
+app.post("/api/browser/type", async (req, res) => {
+  try {
+    const { sessionId, text } = req.body || {};
+    if (!sessionId || text == null) return res.status(400).json({ error: "Falta sessionId/text" });
+
+    const s = await getOrCreateBrowser(sessionId);
+    await s.page.keyboard.type(String(text), { delay: 12 });
+
+    const shot = await safeScreenshot(sessionId);
+    res.json({ ok: true, screenshotBase64: shot });
+  } catch (e) {
+    console.error("browser/type", e);
+    res.status(500).json({ error: "Error type" });
+  }
+});
+
+app.post("/api/browser/key", async (req, res) => {
+  try {
+    const { sessionId, key } = req.body || {};
+    if (!sessionId || !key) return res.status(400).json({ error: "Falta sessionId/key" });
+
+    const s = await getOrCreateBrowser(sessionId);
+    await s.page.keyboard.press(String(key));
+
+    const shot = await safeScreenshot(sessionId);
+    res.json({ ok: true, screenshotBase64: shot });
+  } catch (e) {
+    console.error("browser/key", e);
+    res.status(500).json({ error: "Error key" });
+  }
+});
+
+app.post("/api/browser/stop", async (req, res) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) return res.status(400).json({ error: "Falta sessionId" });
+
+    await closeBrowserSession(sessionId);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error("browser/stop", e);
+    res.status(500).json({ error: "Error stop" });
+  }
+});
+
+// --------------------
+// Chat API (Groq + tools + actions)
+// --------------------
 app.post("/api/chat", async (req, res) => {
   try {
     const { sessionId, userText } = req.body || {};
