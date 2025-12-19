@@ -6,6 +6,7 @@
 // - Voice (WebSpeech)
 // - Backend connection (Render) ✅
 // - Actions: open_url (frontend) ✅
+// - Remote Control Mode (optional): screenshot + click + type ✅ (si backend lo soporta)
 // ==============================
 
 // ------- DOM -------
@@ -31,6 +32,27 @@ const takeOverBtn = document.getElementById("takeOverBtn");
 
 const netStatusEl = document.getElementById("netStatus");
 
+// ----- Mode buttons -----
+const modeIframeBtn = document.getElementById("modeIframeBtn");
+const modeRemoteBtn = document.getElementById("modeRemoteBtn");
+const iframeBox = document.getElementById("iframeBox");
+const remoteBox = document.getElementById("remoteBox");
+
+// ----- Remote UI -----
+const btnRemoteStart = document.getElementById("btnRemoteStart");
+const btnRemoteShot = document.getElementById("btnRemoteShot");
+const btnRemoteGoto = document.getElementById("btnRemoteGoto");
+const remoteUrlInput = document.getElementById("remoteUrlInput");
+const btnRemoteType = document.getElementById("btnRemoteType");
+const remoteTypeInput = document.getElementById("remoteTypeInput");
+const remoteScreen = document.getElementById("remoteScreen");
+
+const btnKeyEnter = document.getElementById("btnKeyEnter");
+const btnKeyBackspace = document.getElementById("btnKeyBackspace");
+const btnKeyTab = document.getElementById("btnKeyTab");
+const btnKeyEsc = document.getElementById("btnKeyEsc");
+const btnKeyCtrlL = document.getElementById("btnKeyCtrlL");
+
 // ✅ Backend Render
 const BACKEND_URL = "https://mira-agent.onrender.com";
 
@@ -52,6 +74,11 @@ const AgentState = {
   DONE: "DONE",
 };
 let currentState = AgentState.IDLE;
+
+// ------- Remote mode -------
+const RemoteViewport = { width: 1280, height: 720 }; // debe coincidir con backend
+let uiMode = localStorage.getItem("mira_ui_mode") || "iframe"; // iframe | remote
+let remoteReady = false;
 
 // ==============================
 // UI Helpers
@@ -166,18 +193,130 @@ function toggleVoice() {
 }
 
 // ==============================
+// Mode switch (iframe/remote)
+// ==============================
+function applyMode(mode) {
+  uiMode = mode;
+  localStorage.setItem("mira_ui_mode", uiMode);
+
+  if (mode === "remote") {
+    iframeBox?.classList.add("hidden");
+    remoteBox?.classList.remove("hidden");
+    modeRemoteBtn?.classList.add("btn-primary");
+    modeRemoteBtn?.classList.remove("btn-ghost");
+    modeIframeBtn?.classList.remove("btn-primary");
+    modeIframeBtn?.classList.add("btn-ghost");
+    logTask("🖥 Modo: Control real (si backend lo soporta).");
+  } else {
+    remoteBox?.classList.add("hidden");
+    iframeBox?.classList.remove("hidden");
+    modeIframeBtn?.classList.add("btn-primary");
+    modeIframeBtn?.classList.remove("btn-ghost");
+    modeRemoteBtn?.classList.remove("btn-primary");
+    modeRemoteBtn?.classList.add("btn-ghost");
+    logTask("🧩 Modo: Iframe (puede ser bloqueado por algunos sitios).");
+  }
+}
+
+modeIframeBtn?.addEventListener("click", () => applyMode("iframe"));
+modeRemoteBtn?.addEventListener("click", () => applyMode("remote"));
+
+// ==============================
 // Copiloto web (iframe + fallback)
 // ==============================
-function openInTask(url) {
+function openInTaskIframe(url) {
   openTaskWindow();
   if (!taskFrame) return;
 
-  // Algunos sitios bloquean iframe. Igual lo intentamos.
   taskFrame.src = url;
-  logTask("🌐 Abriendo en ventana: " + url);
+  logTask("🌐 Abriendo en ventana (iframe): " + url);
+  logTask("↗ Si no se ve, el sitio bloquea iframe. Cambia a Control real o abre en pestaña: " + url);
+}
 
-  // Link fallback por si iframe bloquea
-  logTask("↗ Si no se ve, abre en pestaña: " + url);
+// ==============================
+// Remote Control API (optional)
+// Backend debe implementar /api/browser/*
+// ==============================
+async function remoteStart() {
+  const r = await fetch(`${BACKEND_URL}/api/browser/start`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId })
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || "No se pudo iniciar navegador remoto");
+  if (data.screenshotBase64) {
+    remoteScreen.src = `data:image/png;base64,${data.screenshotBase64}`;
+  }
+  remoteReady = true;
+  logTask("✅ Navegador remoto iniciado.");
+  return data;
+}
+
+async function remoteShot() {
+  const r = await fetch(`${BACKEND_URL}/api/browser/screenshot?sessionId=${encodeURIComponent(sessionId)}`);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || "No se pudo capturar pantalla");
+  if (data.screenshotBase64) {
+    remoteScreen.src = `data:image/png;base64,${data.screenshotBase64}`;
+  }
+  return data;
+}
+
+async function remoteGoto(url) {
+  const r = await fetch(`${BACKEND_URL}/api/browser/goto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, url })
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || "No se pudo navegar");
+  if (data.screenshotBase64) {
+    remoteScreen.src = `data:image/png;base64,${data.screenshotBase64}`;
+  }
+  return data;
+}
+
+async function remoteClick(x, y) {
+  const r = await fetch(`${BACKEND_URL}/api/browser/click`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, x, y })
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || "No se pudo hacer click");
+  if (data.screenshotBase64) {
+    remoteScreen.src = `data:image/png;base64,${data.screenshotBase64}`;
+  }
+  return data;
+}
+
+async function remoteType(text) {
+  const r = await fetch(`${BACKEND_URL}/api/browser/type`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, text })
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || "No se pudo escribir");
+  if (data.screenshotBase64) {
+    remoteScreen.src = `data:image/png;base64,${data.screenshotBase64}`;
+  }
+  return data;
+}
+
+async function remoteKey(key) {
+  const r = await fetch(`${BACKEND_URL}/api/browser/key`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ sessionId, key })
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data?.error || "No se pudo enviar tecla");
+  if (data.screenshotBase64) {
+    remoteScreen.src = `data:image/png;base64,${data.screenshotBase64}`;
+  }
+  return data;
 }
 
 // ==============================
@@ -202,7 +341,7 @@ function looksLikeTask(userText) {
 }
 
 // ==============================
-// Backend
+// Backend (chat)
 // ==============================
 async function callBackend(userText) {
   const r = await fetch(`${BACKEND_URL}/api/chat`, {
@@ -239,12 +378,10 @@ function renderAgent(agent) {
 
   if (hasPlan || hasLogs) openTaskWindow();
 
-  // Estado
   if (agent.state && AgentState[agent.state]) {
     setState(agent.state, "Procesando…");
   }
 
-  // Plan (si existe) — no borramos historial completo, solo separador por turno
   if (hasPlan) {
     logTask("— PLAN —");
     logTask(`🧠 Objetivo: ${agent.plan.goal}`);
@@ -253,19 +390,38 @@ function renderAgent(agent) {
     if (agent.plan.confirm_required) logTask("🔒 Requiere confirmación explícita antes de continuar.");
   }
 
-  // Logs tools
   if (hasLogs) {
     logTask("— LOGS —");
     agent.logs.forEach(line => logTask(line));
   }
 }
 
-function runActions(actions){
+async function runActions(actions){
   if (!Array.isArray(actions)) return;
-  actions.forEach(a => {
-    if (!a || typeof a !== "object") return;
-    if (a.type === "open_url" && a.url) openInTask(a.url);
-  });
+
+  for (const a of actions) {
+    if (!a || typeof a !== "object") continue;
+
+    if (a.type === "open_url" && a.url) {
+      openTaskWindow();
+      logTask("🧠 Acción: open_url -> " + a.url);
+
+      // Si estás en modo remote intentamos control real, si falla caemos a iframe
+      if (uiMode === "remote") {
+        try {
+          if (!remoteReady) await remoteStart();
+          await remoteGoto(a.url);
+          remoteUrlInput.value = a.url;
+        } catch (e) {
+          logTask("⚠ Control real no disponible (backend). Fallback a iframe.");
+          openInTaskIframe(a.url);
+          applyMode("iframe");
+        }
+      } else {
+        openInTaskIframe(a.url);
+      }
+    }
+  }
 }
 
 // ==============================
@@ -296,7 +452,7 @@ async function sendMessage() {
     setNet(true, "Online ✅");
 
     // Ejecuta acciones (por ejemplo open_url)
-    runActions(data.actions);
+    await runActions(data.actions);
 
     // Render plan/logs si vienen del backend
     renderAgent(data.agent);
@@ -358,8 +514,95 @@ takeOverBtn.addEventListener("click", () => {
 });
 
 // ==============================
+// Remote events (si usas modo remote)
+// ==============================
+btnRemoteStart?.addEventListener("click", async () => {
+  openTaskWindow();
+  applyMode("remote");
+  logTask("🟢 Iniciando navegador remoto…");
+  try {
+    await remoteStart();
+  } catch (e) {
+    logTask("⚠ No se pudo iniciar remote: " + (e?.message || "error"));
+    logTask("↘ Cambiando a iframe para que no se rompa.");
+    applyMode("iframe");
+  }
+});
+
+btnRemoteShot?.addEventListener("click", async () => {
+  try {
+    if (!remoteReady) await remoteStart();
+    await remoteShot();
+  } catch (e) {
+    logTask("⚠ Remote screenshot falló: " + (e?.message || "error"));
+  }
+});
+
+btnRemoteGoto?.addEventListener("click", async () => {
+  const url = (remoteUrlInput?.value || "").trim();
+  if (!url) return;
+  try {
+    if (!remoteReady) await remoteStart();
+    await remoteGoto(url);
+    logTask("🌐 Remote goto: " + url);
+  } catch (e) {
+    logTask("⚠ Remote goto falló: " + (e?.message || "error"));
+  }
+});
+
+btnRemoteType?.addEventListener("click", async () => {
+  const txt = (remoteTypeInput?.value || "");
+  if (!txt) return;
+  try {
+    if (!remoteReady) await remoteStart();
+    await remoteType(txt);
+    logTask("⌨ Texto enviado.");
+  } catch (e) {
+    logTask("⚠ Remote type falló: " + (e?.message || "error"));
+  }
+});
+
+btnKeyEnter?.addEventListener("click", async () => {
+  try { if (!remoteReady) await remoteStart(); await remoteKey("Enter"); } catch (e){ logTask("⚠ " + e.message); }
+});
+btnKeyBackspace?.addEventListener("click", async () => {
+  try { if (!remoteReady) await remoteStart(); await remoteKey("Backspace"); } catch (e){ logTask("⚠ " + e.message); }
+});
+btnKeyTab?.addEventListener("click", async () => {
+  try { if (!remoteReady) await remoteStart(); await remoteKey("Tab"); } catch (e){ logTask("⚠ " + e.message); }
+});
+btnKeyEsc?.addEventListener("click", async () => {
+  try { if (!remoteReady) await remoteStart(); await remoteKey("Escape"); } catch (e){ logTask("⚠ " + e.message); }
+});
+btnKeyCtrlL?.addEventListener("click", async () => {
+  try { if (!remoteReady) await remoteStart(); await remoteKey("Control+L"); } catch (e){ logTask("⚠ " + e.message); }
+});
+
+// Click en screenshot => click real
+remoteScreen?.addEventListener("click", async (e) => {
+  if (!remoteReady) {
+    logTask("⚠ Remote no iniciado. Presiona 🟢 Iniciar.");
+    return;
+  }
+
+  const rect = remoteScreen.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+
+  const x = (e.clientX - rect.left) * (RemoteViewport.width / rect.width);
+  const y = (e.clientY - rect.top) * (RemoteViewport.height / rect.height);
+
+  logTask(`🖱 Click: (${Math.round(x)}, ${Math.round(y)})`);
+  try {
+    await remoteClick(x, y);
+  } catch (err) {
+    logTask("⚠ Remote click falló: " + (err?.message || "error"));
+  }
+});
+
+// ==============================
 // Initial greeting
 // ==============================
+applyMode(uiMode);
 setNet(true, "Online ✅");
 setState(AgentState.IDLE, "Lista para trabajar.");
 addMessage("Hola, soy <strong>MIRA</strong>. Estoy lista para trabajar contigo en modo copiloto web. 👋", "mira");
