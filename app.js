@@ -1,10 +1,11 @@
 // ==============================
-// MIRA Agent Web (Planner + Tools Ready)
+// MIRA Agent Web (Copiloto + Planner + Tools)
 // - Chat UI
-// - Task window (logs/plan)
+// - Task window (plan/logs)
 // - Agent states
 // - Voice (WebSpeech)
 // - Backend connection (Render) ✅
+// - Actions: open_url (frontend) ✅
 // ==============================
 
 // ------- DOM -------
@@ -19,6 +20,7 @@ const toggleVoiceBtn = document.getElementById("toggleVoiceBtn");
 const taskWindow = document.getElementById("taskWindow");
 const closeTaskBtn = document.getElementById("closeTaskBtn");
 const taskLogEl = document.getElementById("taskLog");
+const taskFrame = document.getElementById("taskFrame");
 
 const agentStateEl = document.getElementById("agentState");
 const agentHintEl = document.getElementById("agentHint");
@@ -27,10 +29,12 @@ const pauseBtn = document.getElementById("pauseBtn");
 const resumeBtn = document.getElementById("resumeBtn");
 const takeOverBtn = document.getElementById("takeOverBtn");
 
+const netStatusEl = document.getElementById("netStatus");
+
 // ✅ Backend Render
 const BACKEND_URL = "https://mira-agent.onrender.com";
 
-// ------- Session (memoria reciente en backend por sessionId) -------
+// ------- Session (memoria por sessionId en backend) -------
 const sessionId = localStorage.getItem("mira_session_id") || crypto.randomUUID();
 localStorage.setItem("mira_session_id", sessionId);
 
@@ -47,7 +51,6 @@ const AgentState = {
   RECOVERING: "RECOVERING",
   DONE: "DONE",
 };
-
 let currentState = AgentState.IDLE;
 
 // ==============================
@@ -130,11 +133,11 @@ function showTyping(on) {
 // ==============================
 function stripDoNotRead(text) {
   return String(text)
-    .replace(/```[\s\S]*?```/g, "")      // code blocks
-    .replace(/`[^`]*`/g, "")            // inline code
-    .replace(/\$\$[\s\S]*?\$\$/g, "")   // latex blocks
-    .replace(/\$[^$]*\$/g, "")          // latex inline
-    .replace(/\{\{[\s\S]*?\}\}/g, "")   // templates
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`[^`]*`/g, "")
+    .replace(/\$\$[\s\S]*?\$\$/g, "")
+    .replace(/\$[^$]*\$/g, "")
+    .replace(/\{\{[\s\S]*?\}\}/g, "")
     .trim();
 }
 
@@ -163,21 +166,37 @@ function toggleVoice() {
 }
 
 // ==============================
+// Copiloto web (iframe + fallback)
+// ==============================
+function openInTask(url) {
+  openTaskWindow();
+  if (!taskFrame) return;
+
+  // Algunos sitios bloquean iframe. Igual lo intentamos.
+  taskFrame.src = url;
+  logTask("🌐 Abriendo en ventana: " + url);
+
+  // Link fallback por si iframe bloquea
+  logTask("↗ Si no se ve, abre en pestaña: " + url);
+}
+
+// ==============================
 // Agent heuristics (frontend hint)
 // ==============================
 function looksLikeTask(userText) {
   const t = (userText || "").toLowerCase();
   const verbs = [
-    "abre", "abrir",
-    "buscar", "busca",
-    "rellena", "rellenar",
-    "completa", "completar",
-    "envía", "enviar",
-    "manda", "mandar",
-    "descarga", "descargar",
-    "sube", "subir",
-    "publica", "publicar",
-    "crea", "crear"
+    "abre","abrir",
+    "buscar","busca",
+    "rellena","rellenar",
+    "completa","completar",
+    "envía","enviar",
+    "manda","mandar",
+    "descarga","descargar",
+    "sube","subir",
+    "publica","publicar",
+    "crea","crear",
+    "pon","reproduce","reproducir"
   ];
   return verbs.some(v => t.includes(v));
 }
@@ -199,17 +218,22 @@ async function callBackend(userText) {
     const msg = data?.error || "Backend error";
     throw new Error(msg);
   }
+  return data; // { assistantText, agent?, actions? }
+}
 
-  return data; // { assistantText, agent? }
+function setNet(ok, msg){
+  if (!netStatusEl) return;
+  netStatusEl.textContent = msg;
+  netStatusEl.classList.remove("good","bad");
+  netStatusEl.classList.add(ok ? "good" : "bad");
 }
 
 // ==============================
-// Render Agent Plan + Logs (from backend)
+// Render Agent Plan + Logs
 // ==============================
 function renderAgent(agent) {
   if (!agent) return;
 
-  // Abrir panel si hay algo que mostrar
   const hasPlan = !!agent.plan;
   const hasLogs = Array.isArray(agent.logs) && agent.logs.length > 0;
 
@@ -220,28 +244,28 @@ function renderAgent(agent) {
     setState(agent.state, "Procesando…");
   }
 
-  // Mostrar plan (si existe)
+  // Plan (si existe) — no borramos historial completo, solo separador por turno
   if (hasPlan) {
-    clearTaskLog();
+    logTask("— PLAN —");
     logTask(`🧠 Objetivo: ${agent.plan.goal}`);
-
-    (agent.plan.steps || []).forEach((s, i) => {
-      logTask(`${i + 1}. ${s}`);
-    });
-
-    if (agent.plan.needs_user?.length) {
-      logTask(`🙋 Necesito de ti: ${agent.plan.needs_user.join(" | ")}`);
-    }
-
-    if (agent.plan.confirm_required) {
-      logTask("🔒 Requiere confirmación explícita antes de continuar.");
-    }
+    (agent.plan.steps || []).forEach((s, i) => logTask(`${i + 1}. ${s}`));
+    if (agent.plan.needs_user?.length) logTask(`🙋 Necesito de ti: ${agent.plan.needs_user.join(" | ")}`);
+    if (agent.plan.confirm_required) logTask("🔒 Requiere confirmación explícita antes de continuar.");
   }
 
-  // Logs de tools (si existen)
+  // Logs tools
   if (hasLogs) {
+    logTask("— LOGS —");
     agent.logs.forEach(line => logTask(line));
   }
+}
+
+function runActions(actions){
+  if (!Array.isArray(actions)) return;
+  actions.forEach(a => {
+    if (!a || typeof a !== "object") return;
+    if (a.type === "open_url" && a.url) openInTask(a.url);
+  });
 }
 
 // ==============================
@@ -254,31 +278,33 @@ async function sendMessage() {
   addMessage(text, "user");
   inputEl.value = "";
 
-  // UI 상태
   setState(AgentState.IDLE, "Conversando…");
   showTyping(true);
 
-  // Hint inicial (solo UI)
   if (looksLikeTask(text)) {
     openTaskWindow();
     setState(AgentState.PLANNING, "Analizando tarea…");
-    logTask("📌 Detecté una posible tarea accionable.");
+    logTask("📌 Tarea detectada (modo copiloto).");
     logTask("🔒 Si aparece login, tú ingresas credenciales manualmente.");
   }
 
   try {
+    setNet(true, "Conectando…");
     const data = await callBackend(text);
     showTyping(false);
 
-    // Planner + Tools info (si backend lo envía)
+    setNet(true, "Online ✅");
+
+    // Ejecuta acciones (por ejemplo open_url)
+    runActions(data.actions);
+
+    // Render plan/logs si vienen del backend
     renderAgent(data.agent);
 
-    // Respuesta
     const reply = data.assistantText || "No pude responder.";
     addMessage(reply, "mira");
     speak(reply);
 
-    // Estado final
     if (data.agent?.plan?.confirm_required) {
       setState(AgentState.WAITING_USER, "Esperando tu confirmación…");
     } else {
@@ -287,11 +313,9 @@ async function sendMessage() {
 
   } catch (e) {
     showTyping(false);
+    setNet(false, "Offline / Error");
     setState(AgentState.RECOVERING, "Problema de conexión.");
-    addMessage(
-      "Tuve un problema conectando con el servidor. Revisa que el backend esté activo en Render y que la URL sea correcta.",
-      "mira"
-    );
+    addMessage("Tuve un problema conectando con el servidor. Revisa Render/URL.", "mira");
     logTask("⚠ Error: " + (e?.message || "desconocido"));
   }
 }
@@ -300,9 +324,7 @@ async function sendMessage() {
 // Events
 // ==============================
 sendBtn.addEventListener("click", sendMessage);
-inputEl.addEventListener("keydown", (e) => {
-  if (e.key === "Enter") sendMessage();
-});
+inputEl.addEventListener("keydown", (e) => { if (e.key === "Enter") sendMessage(); });
 
 newChatBtn.addEventListener("click", () => {
   messagesEl.innerHTML = "";
@@ -324,7 +346,7 @@ pauseBtn.addEventListener("click", () => {
 resumeBtn.addEventListener("click", () => {
   logTask("▶ Continuar solicitado por el usuario.");
   setState(AgentState.EXECUTING, "Reanudando…");
-  setTimeout(() => setState(AgentState.OBSERVING, "Verificando resultados…"), 600);
+  setTimeout(() => setState(AgentState.OBSERVING, "Verificando…"), 600);
   setTimeout(() => setState(AgentState.DONE, "Listo."), 1200);
 });
 
@@ -338,6 +360,7 @@ takeOverBtn.addEventListener("click", () => {
 // ==============================
 // Initial greeting
 // ==============================
+setNet(true, "Online ✅");
 setState(AgentState.IDLE, "Lista para trabajar.");
-addMessage("Hola, soy <strong>MIRA</strong>. Ya tengo <u>cerebro cloud</u> conectado. 👋", "mira");
-speak("Hola, soy MIRA. Ya tengo cerebro cloud conectado.");
+addMessage("Hola, soy <strong>MIRA</strong>. Estoy lista para trabajar contigo en modo copiloto web. 👋", "mira");
+speak("Hola, soy MIRA. Estoy lista para trabajar contigo en modo copiloto web.");
