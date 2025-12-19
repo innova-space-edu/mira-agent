@@ -1,1 +1,79 @@
-g
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <title>MIRA Agent</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+  <!-- Top Bar -->
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">M</div>
+      <div class="titles">
+        <h1>MIRA</h1>
+        <p>AI Agent · Web</p>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button id="toggleVoiceBtn" class="btn ghost" title="Activar/Desactivar voz">🔊 Voz</button>
+      <button id="newChatBtn" class="btn ghost" title="Nuevo chat">🆕 Nuevo</button>
+      <button id="openTaskBtn" class="btn primary" title="Abrir ventana de tareas">🧠 Tarea</button>
+    </div>
+  </header>
+
+  <!-- Layout -->
+  <main class="layout">
+
+    <!-- Chat Panel -->
+    <section class="chat">
+      <div id="messages" class="messages" aria-live="polite"></div>
+
+      <div class="composer">
+        <input id="userInput" type="text" placeholder="Escribe aquí… (Ej: ‘MIRA, abre YouTube y busca un video de probabilidad’)"/>
+        <button id="sendBtn" class="btn primary">Enviar</button>
+      </div>
+    </section>
+
+    <!-- Task Window -->
+    <aside id="taskWindow" class="task hidden">
+      <div class="taskHeader">
+        <h2>🧠 Ventana de tarea</h2>
+        <button id="closeTaskBtn" class="btn ghost">✖</button>
+      </div>
+
+      <div class="taskBody">
+        <div class="taskState">
+          <span class="badge" id="agentState">IDLE</span>
+          <span class="hint" id="agentHint">Lista para trabajar.</span>
+        </div>
+
+        <ul id="taskLog" class="taskLog"></ul>
+
+        <div class="taskControls">
+          <button id="pauseBtn" class="btn ghost">⏸ Pausar</button>
+          <button id="resumeBtn" class="btn ghost">▶ Continuar</button>
+          <button id="takeOverBtn" class="btn danger">🧑‍✈️ Tomo control</button>
+        </div>
+
+        <div class="securityNote">
+          <p><strong>Seguridad:</strong> si aparece inicio de sesión, <u>tú escribes tus credenciales</u>. MIRA no guarda contraseñas.</p>
+        </div>
+      </div>
+    </aside>
+
+  </main>
+
+  <footer class="footer">
+    <span>© Innova Space · MIRA Agent (Base)</span>
+    <span class="muted">GitHub Pages ready</span>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
+
