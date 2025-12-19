@@ -5,27 +5,33 @@ import OpenAI from "openai";
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-// ✅ CORS: permite tu GitHub Pages. (En producción lo puedes restringir más)
-app.use(cors({
-  origin: "*",
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type"]
-}));
+// Para empezar simple: permitir cualquier origen.
+// Luego lo restringimos a tu GitHub Pages.
+app.use(cors());
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const client = new OpenAI({
+  apiKey: process.env.GROQ_API_KEY,
+  baseURL: "https://api.groq.com/openai/v1",
+});
 
-// Memoria reciente por sesión (en RAM). Más adelante: DB/Redis.
+// Memoria reciente por sesión (RAM)
 const sessions = new Map();
 const MAX_TURNS = 18;
 
-// Prompt del “cerebro” MIRA (base conversacional + seguridad)
 const SYSTEM_PROMPT = `
 Eres MIRA (Modular Intelligent Responsive Assistant), un agente conversacional profesional.
 Hablas siempre en español latino, natural y claro.
 Mantén coherencia con el contexto reciente.
-Nunca pidas contraseñas ni datos sensibles. Si aparece login, el usuario ingresa sus credenciales manualmente.
-Si el usuario pide acciones delicadas (enviar/pagar/borrar/publicar), pide confirmación explícita.
-Responde sin relleno, útil, ordenado y amable.
+
+SEGURIDAD:
+- Nunca pidas ni almacenes contraseñas.
+- Si aparece login, el usuario ingresa credenciales manualmente.
+- Para acciones delicadas (enviar/pagar/borrar/publicar), pide confirmación explícita.
+
+Cuando el usuario pida una tarea web:
+- Propon un plan corto (2–6 pasos).
+- Di qué necesitas del usuario (si aplica).
+- Confirma antes de ejecutar acciones delicadas.
 `;
 
 function getSession(sessionId) {
@@ -35,12 +41,11 @@ function getSession(sessionId) {
 
 function pushMsg(session, role, content) {
   session.push({ role, content });
-  // recorta
   const maxMsgs = MAX_TURNS * 2;
   if (session.length > maxMsgs) session.splice(0, session.length - maxMsgs);
 }
 
-app.get("/", (_, res) => res.send("MIRA backend OK ✅"));
+app.get("/", (_, res) => res.send("MIRA backend (Groq) OK ✅"));
 
 app.post("/api/chat", async (req, res) => {
   try {
@@ -52,19 +57,25 @@ app.post("/api/chat", async (req, res) => {
     const session = getSession(sessionId);
     pushMsg(session, "user", userText);
 
-    // ✅ Chat Completions (estable y simple para arrancar)
+    const model = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+
+    // Chat Completions (OpenAI-compatible en Groq)
     const response = await client.chat.completions.create({
-      model: process.env.OPENAI_MODEL || "gpt-5.2",
+      model,
       messages: [
         { role: "system", content: SYSTEM_PROMPT },
-        ...session.map(m => ({ role: m.role, content: m.content }))
-      ]
+        ...session.map(m => ({ role: m.role, content: m.content })),
+      ],
+      temperature: 0.6
     });
 
-    const assistantText = response.choices?.[0]?.message?.content?.trim() || "No pude generar respuesta.";
+    const assistantText =
+      response.choices?.[0]?.message?.content?.trim() ||
+      "No pude generar respuesta.";
+
     pushMsg(session, "assistant", assistantText);
 
-    res.json({ assistantText });
+    res.json({ assistantText, model });
   } catch (err) {
     console.error("ERROR /api/chat:", err);
     res.status(500).json({ error: "Error en el servidor" });
@@ -72,4 +83,4 @@ app.post("/api/chat", async (req, res) => {
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("MIRA backend escuchando en", PORT));
+app.listen(PORT, () => console.log("MIRA backend (Groq) escuchando en", PORT));
