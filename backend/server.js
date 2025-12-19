@@ -35,7 +35,17 @@ function pushMsg(session, role, content, name) {
 
 function isTaskLike(text) {
   const t = (text || "").toLowerCase();
-  const verbs = ["abre", "abrir", "busca", "buscar", "rellena", "rellenar", "completa", "completar", "descarga", "descargar", "sube", "subir", "publica", "publicar", "crea", "crear"];
+  const verbs = [
+    "abre", "abrir",
+    "busca", "buscar",
+    "rellena", "rellenar",
+    "completa", "completar",
+    "descarga", "descargar",
+    "sube", "subir",
+    "publica", "publicar",
+    "crea", "crear",
+    "pon", "reproduce", "reproducir"
+  ];
   return verbs.some(v => t.includes(v));
 }
 
@@ -47,7 +57,11 @@ function stripHtmlToText(html) {
   // remove tags
   s = s.replace(/<\/?[^>]+(>|$)/g, " ");
   // decode basic entities
-  s = s.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">");
+  s = s
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
   // collapse whitespace
   s = s.replace(/\s+/g, " ").trim();
   return s;
@@ -56,8 +70,15 @@ function stripHtmlToText(html) {
 // --------------------
 // Tools v1 (server-side)
 // --------------------
-const toolLog = new Map(); // sessionId -> array logs
+const toolLog = new Map();   // sessionId -> array logs
 const planStore = new Map(); // sessionId -> plan object
+
+// ✅ NUEVO: acciones para el frontend (copiloto)
+const actionStore = new Map(); // sessionId -> actions[]
+function pushAction(sessionId, action) {
+  if (!actionStore.has(sessionId)) actionStore.set(sessionId, []);
+  actionStore.get(sessionId).push(action);
+}
 
 function pushToolLog(sessionId, line) {
   if (!toolLog.has(sessionId)) toolLog.set(sessionId, []);
@@ -107,6 +128,22 @@ const tools = [
         properties: {
           url: { type: "string", description: "URL http(s) a consultar." },
           max_chars: { type: "integer", description: "Máximo de caracteres de texto a devolver.", default: 12000 }
+        },
+        required: ["url"]
+      }
+    }
+  },
+  // ✅ NUEVO: tool copiloto (abrir URL en el frontend)
+  {
+    type: "function",
+    function: {
+      name: "open_url",
+      description:
+        "Solicita abrir una URL en la ventana de tareas del frontend (modo copiloto). Úsala cuando el usuario diga 'abre X' o necesites mostrar una web.",
+      parameters: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "URL http(s) a abrir." }
         },
         required: ["url"]
       }
@@ -167,6 +204,14 @@ async function runTool(sessionId, toolCall) {
     };
   }
 
+  // ✅ NUEVO: open_url (solo genera acción para el frontend)
+  if (name === "open_url") {
+    const url = args.url;
+    pushToolLog(sessionId, `🪟 Abrir URL solicitada: ${url}`);
+    pushAction(sessionId, { type: "open_url", url });
+    return { ok: true };
+  }
+
   // Tool desconocida
   pushToolLog(sessionId, `⚠ Tool desconocida: ${name}`);
   return { error: "Unknown tool" };
@@ -189,7 +234,9 @@ MODO AGENTE (OBLIGATORIO cuando detectes tarea):
    - steps (2 a 6 pasos)
    - confirm_required (true si enviar/pagar/borrar/publicar/login)
    - needs_user (si necesitas que el usuario haga algo)
-2) Después de set_plan:
+2) Si el usuario pidió "abrir" un sitio, o necesitas mostrar una web:
+   - Llama a open_url con la URL correspondiente (ej: https://www.youtube.com).
+3) Después de set_plan/open_url:
    - Si necesitas leer una URL para responder/validar, usa web_fetch(url).
    - Luego responde al usuario con:
      - ✅ Objetivo
@@ -206,7 +253,7 @@ IMPORTANTE:
 - No inventes contenido de páginas: si no lo sabes, pide URL o usa web_fetch.
 `;
 
-app.get("/", (_, res) => res.send("MIRA backend (Groq + Planner + Tools) OK ✅"));
+app.get("/", (_, res) => res.send("MIRA backend (Groq + Planner + Tools + Copilot) OK ✅"));
 
 app.post("/api/chat", async (req, res) => {
   try {
@@ -215,9 +262,10 @@ app.post("/api/chat", async (req, res) => {
       return res.status(400).json({ error: "Falta sessionId o userText" });
     }
 
-    // limpia logs/plan por turno (para enviar al frontend solo lo relevante)
+    // limpia logs/plan/acciones por turno (para enviar al frontend solo lo relevante)
     toolLog.set(sessionId, []);
     planStore.delete(sessionId);
+    actionStore.set(sessionId, []);
 
     const session = getSession(sessionId);
     pushMsg(session, "user", userText);
@@ -281,6 +329,7 @@ app.post("/api/chat", async (req, res) => {
 
     const plan = planStore.get(sessionId) || null;
     const logs = toolLog.get(sessionId) || [];
+    const actions = actionStore.get(sessionId) || [];
 
     res.json({
       assistantText: finalText,
@@ -288,7 +337,8 @@ app.post("/api/chat", async (req, res) => {
         state: plan ? "PLANNING" : (wantAgent ? agentState : "IDLE"),
         plan,
         logs
-      }
+      },
+      actions
     });
 
   } catch (err) {
@@ -299,4 +349,3 @@ app.post("/api/chat", async (req, res) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("MIRA backend (Groq) escuchando en", PORT));
-s
