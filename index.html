@@ -3,76 +3,88 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>MIRA Agent (Web)</title>
+  <title>MIRA Agent • Copiloto + Planner</title>
   <link rel="stylesheet" href="style.css" />
 </head>
 
 <body>
+  <!-- Background FX -->
+  <div class="bg">
+    <div class="orb orb-a"></div>
+    <div class="orb orb-b"></div>
+    <div class="grid"></div>
+    <div class="vignette"></div>
+  </div>
+
   <div class="app">
 
-    <!-- Top bar -->
-    <header class="topbar">
+    <!-- Topbar -->
+    <div class="topbar">
       <div class="brand">
-        <div class="logo"></div>
-        <div>
-          <div class="brand-title">MIRA Agent</div>
-          <div class="brand-sub">Copiloto web • Planner + Tools</div>
+        <div class="logo">
+          <div class="logo-dot"></div>
+          <div class="logo-ring"></div>
+        </div>
+        <div class="brand-text">
+          <div class="title">MIRA Agent <span class="muted">PRO</span></div>
+          <div class="subtitle">Copiloto Web • Planner + Tools • Innova Space</div>
         </div>
       </div>
 
       <div class="top-actions">
         <button id="toggleVoiceBtn" class="btn btn-ghost">🔊 Voz</button>
-        <button id="openTaskBtn" class="btn btn-primary">🪟 Ventana de tareas</button>
+        <button id="openTaskBtn" class="btn btn-primary">🪟 Ventana</button>
         <button id="newChatBtn" class="btn btn-ghost">＋ Nuevo chat</button>
       </div>
-    </header>
+    </div>
 
-    <!-- Main split -->
-    <main class="split">
+    <!-- Layout -->
+    <div class="layout">
 
       <!-- Chat panel -->
-      <section class="panel chat-panel">
+      <div class="panel chat-panel">
         <div class="panel-head">
-          <div class="pill online">ONLINE</div>
+          <div class="pill">ONLINE</div>
+
           <div class="panel-title">
             <div class="h">Chat</div>
-            <div class="s">MIRA responde y guía acciones</div>
+            <div class="small">Habla con MIRA. Si detecta tarea: plan + copiloto.</div>
           </div>
 
-          <div class="status-box">
-            <div class="status-line">
-              <span class="status-label">Estado</span>
-              <span id="agentState" class="status-value">IDLE</span>
+          <div class="agent-badge">
+            <div class="agent-state">
+              <span class="k">Estado</span>
+              <span id="agentState" class="v">IDLE</span>
             </div>
-            <div id="agentHint" class="status-hint">Lista para trabajar.</div>
+            <div id="agentHint" class="agent-hint">Lista para trabajar.</div>
           </div>
         </div>
 
         <div id="messages" class="messages"></div>
 
         <div class="composer">
-          <input id="userInput" class="input"
-                 placeholder="Escribe aquí… (ej: “abre YouTube y pon música lo-fi”)" />
-          <button id="sendBtn" class="btn btn-primary">Enviar</button>
+          <input id="userInput" class="input" placeholder="Escribe aquí… (ej: “abre YouTube y pon lo-fi”)"/>
+          <button id="sendBtn" class="btn btn-send">Enviar</button>
         </div>
 
-        <div class="footer-mini">
+        <div class="hint-row">
           <span class="dot"></span>
-          <span>Innova Space Education • MIRA (Copiloto Web)</span>
-          <span id="connState" class="conn">—</span>
+          <span>Conexión:</span>
+          <span id="netStatus" class="net good">Online ✅</span>
         </div>
-      </section>
+      </div>
 
-      <!-- Task Window (right) -->
-      <aside id="taskWindow" class="panel task-panel hidden">
+      <!-- Task window -->
+      <div id="taskWindow" class="panel task-panel hidden">
         <div class="panel-head">
-          <div class="pill agent">MODO AGENTE</div>
+          <div class="pill pill-alt">MODO TAREA</div>
+
           <div class="panel-title">
             <div class="h">Ventana de tareas</div>
-            <div class="s">Control real: clic + teclado (Playwright)</div>
+            <div class="small">Plan + logs + web (iframe) y/o control real (remote)</div>
           </div>
 
-          <div class="task-actions">
+          <div class="top-actions">
             <button id="pauseBtn" class="btn btn-ghost">⏸ Pausa</button>
             <button id="resumeBtn" class="btn btn-ghost">▶ Continuar</button>
             <button id="takeOverBtn" class="btn btn-ghost">🧑‍✈️ Tomo control</button>
@@ -81,50 +93,82 @@
         </div>
 
         <div class="task-body">
-          <div class="card">
-            <div class="card-title">📋 Registro</div>
-            <ul id="taskLog" class="tasklog"></ul>
+          <!-- Logs -->
+          <div class="task-section">
+            <div class="task-title">📋 Registro / Plan</div>
+            <ul id="taskLog" class="task-log"></ul>
           </div>
 
-          <div class="card">
-            <div class="card-title">🧠 Plan</div>
-            <div id="planBox" class="planbox">Aún no hay plan.</div>
+          <!-- MODE SWITCH -->
+          <div class="task-section">
+            <div class="task-title">🧭 Modo de navegación</div>
+            <div class="mode-row">
+              <button id="modeIframeBtn" class="btn btn-primary">🧩 Iframe</button>
+              <button id="modeRemoteBtn" class="btn btn-ghost">🖥 Control real</button>
+              <div class="mode-note">
+                Iframe puede ser bloqueado por sitios. Control real requiere backend con navegador (Playwright/Puppeteer).
+              </div>
+            </div>
           </div>
 
-          <div class="card">
-            <div class="card-title">🖥 Control remoto</div>
-
-            <div class="toolbar">
-              <button id="btnStartBrowser" class="btn btn-ghost" type="button">🟢 Iniciar</button>
-              <button id="btnRefresh" class="btn btn-ghost" type="button">📸 Actualizar</button>
-
-              <button id="btnEnter" class="btn btn-ghost" type="button">⏎ Enter</button>
-              <button id="btnBackspace" class="btn btn-ghost" type="button">⌫ Back</button>
-              <button id="btnTab" class="btn btn-ghost" type="button">⇥ Tab</button>
-              <button id="btnEsc" class="btn btn-ghost" type="button">⎋ Esc</button>
-              <button id="btnCtrlL" class="btn btn-ghost" type="button">Ctrl+L</button>
+          <!-- IFRAME MODE -->
+          <div id="iframeBox" class="task-section">
+            <div class="task-title">🌐 Web (iframe)</div>
+            <div class="task-web">
+              <iframe id="taskFrame" title="Task Frame" allow="clipboard-read; clipboard-write"></iframe>
             </div>
-
-            <div class="goto">
-              <input id="urlInput" class="input input-mini" placeholder="https://www.youtube.com" />
-              <button id="btnGoto" class="btn btn-primary" type="button">Ir</button>
+            <div class="task-note">
+              Si el sitio bloquea iframe, verás pantalla negra o error. En ese caso usa “Control real” o abre en pestaña.
             </div>
-
-            <div class="typebox">
-              <input id="typeInput" class="input input-mini" placeholder="Escribir texto…" />
-              <button id="btnType" class="btn btn-ghost" type="button">⌨ Escribir</button>
-            </div>
-
-            <div class="screenwrap">
-              <img id="taskScreen" alt="Remote Screen" />
-              <div class="screenhint">Haz clic sobre la imagen para hacer clic real.</div>
-            </div>
-
           </div>
+
+          <!-- REMOTE MODE (REAL CONTROL) -->
+          <div id="remoteBox" class="task-section hidden">
+            <div class="task-title">🖥 Control real (Remote)</div>
+
+            <div class="remote-toolbar">
+              <button id="btnRemoteStart" class="btn btn-ghost">🟢 Iniciar</button>
+              <button id="btnRemoteShot" class="btn btn-ghost">📸 Actualizar</button>
+
+              <button id="btnKeyEnter" class="btn btn-ghost">⏎ Enter</button>
+              <button id="btnKeyBackspace" class="btn btn-ghost">⌫ Backspace</button>
+              <button id="btnKeyTab" class="btn btn-ghost">⇥ Tab</button>
+              <button id="btnKeyEsc" class="btn btn-ghost">⎋ Esc</button>
+              <button id="btnKeyCtrlL" class="btn btn-ghost">Ctrl+L</button>
+            </div>
+
+            <div class="remote-row">
+              <input id="remoteUrlInput" class="input input-mini" placeholder="https://www.youtube.com" />
+              <button id="btnRemoteGoto" class="btn btn-primary">Ir</button>
+            </div>
+
+            <div class="remote-row">
+              <input id="remoteTypeInput" class="input input-mini" placeholder="Escribir texto…" />
+              <button id="btnRemoteType" class="btn btn-ghost">⌨ Escribir</button>
+            </div>
+
+            <div class="remote-screen">
+              <img id="remoteScreen" alt="Remote Screen" />
+              <div class="remote-hint">Haz clic sobre la imagen para hacer clic real. (coord mapeadas)</div>
+            </div>
+
+            <div class="task-note">
+              Login: tú escribes credenciales. MIRA guía. Para acciones delicadas, MIRA pedirá confirmación.
+            </div>
+          </div>
+
         </div>
-      </aside>
+      </div>
 
-    </main>
+    </div>
+
+    <div class="footer">
+      <span>Innova Space Education</span>
+      <span class="sep">•</span>
+      <span>MIRA Agent PRO</span>
+      <span class="sep">•</span>
+      <span class="muted">Copiloto Web</span>
+    </div>
 
   </div>
 
