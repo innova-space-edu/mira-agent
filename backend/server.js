@@ -1,7 +1,10 @@
 import express from "express";
 import cors from "cors";
 import OpenAI from "openai";
-import puppeteer from "puppeteer";
+
+// ✅ Cambiamos a puppeteer-core + chromium portable (Render-friendly)
+import puppeteer from "puppeteer-core";
+import chromium from "@sparticuz/chromium";
 
 const app = express();
 app.use(express.json({ limit: "2mb" }));
@@ -9,6 +12,18 @@ app.use(express.json({ limit: "2mb" }));
 // ✅ Puedes restringir a tu GitHub Pages más adelante.
 // Por ahora dejamos abierto para no bloquear pruebas.
 app.use(cors());
+
+// --------------------
+// Fetch seguro (por si Node no trae fetch en tu runtime de Render)
+// --------------------
+let _fetch = globalThis.fetch;
+async function safeFetch(...args) {
+  if (!_fetch) {
+    const mod = await import("node-fetch");
+    _fetch = mod.default;
+  }
+  return _fetch(...args);
+}
 
 const client = new OpenAI({
   apiKey: process.env.GROQ_API_KEY,
@@ -179,7 +194,7 @@ async function runTool(sessionId, toolCall) {
 
     pushToolLog(sessionId, `🌐 web_fetch: ${url}`);
 
-    const resp = await fetch(url, {
+    const resp = await safeFetch(url, {
       method: "GET",
       headers: {
         "User-Agent": "MIRA-Agent/1.0 (+https://innova-space-edu.github.io/mira-agent/)"
@@ -223,15 +238,50 @@ async function runTool(sessionId, toolCall) {
 const browserSessions = new Map();
 // sessionId -> { browser, page, viewport, lastShotBase64, lastUrl }
 
+function browserDisabled() {
+  // ✅ opción para apagar navegador en Render si quieres estabilidad
+  return String(process.env.DISABLE_BROWSER || "").trim() === "1";
+}
+
 async function getOrCreateBrowser(sessionId) {
+  if (browserDisabled()) {
+    const err = new Error("Browser deshabilitado por DISABLE_BROWSER=1");
+    err.code = "BROWSER_DISABLED";
+    throw err;
+  }
+
   if (browserSessions.has(sessionId)) return browserSessions.get(sessionId);
 
   const viewport = { width: 1280, height: 720 };
 
-  // ✅ En Render/Linux, esto es clave
+  // ✅ 1) Si hay browser remoto: usa websocket
+  if (process.env.BROWSER_WS) {
+    const browser = await puppeteer.connect({
+      browserWSEndpoint: process.env.BROWSER_WS,
+    });
+
+    const page = await browser.newPage();
+    await page.setUserAgent(
+      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36"
+    );
+    page.setDefaultNavigationTimeout(45000);
+    page.setDefaultTimeout(30000);
+
+    const obj = { browser, page, viewport, lastShotBase64: "", lastUrl: "" };
+    browserSessions.set(sessionId, obj);
+    return obj;
+  }
+
+  // ✅ 2) Browser local: usa chromium portable o executablePath si lo defines
+  const executablePath =
+    process.env.PUPPETEER_EXECUTABLE_PATH ||
+    (await chromium.executablePath());
+
   const browser = await puppeteer.launch({
     headless: "new",
+    executablePath,
     args: [
+      ...chromium.args,
       "--no-sandbox",
       "--disable-setuid-sandbox",
       "--disable-dev-shm-usage",
@@ -334,7 +384,14 @@ app.post("/api/browser/start", async (req, res) => {
     res.json({ ok: true, viewport: s.viewport, screenshotBase64: shot });
   } catch (e) {
     console.error("browser/start", e);
-    res.status(500).json({ error: "Error iniciando navegador" });
+
+    // ✅ En vez de 500 duro, devolvemos ok:false con razón
+    const reason =
+      e?.code === "BROWSER_DISABLED"
+        ? "Browser deshabilitado (DISABLE_BROWSER=1)"
+        : (e?.message || "Error iniciando navegador");
+
+    res.status(200).json({ ok: false, error: reason, hint: "Usa modo Iframe o configura BROWSER_WS / Chromium." });
   }
 });
 
@@ -352,7 +409,7 @@ app.post("/api/browser/goto", async (req, res) => {
     res.json({ ok: true, screenshotBase64: shot });
   } catch (e) {
     console.error("browser/goto", e);
-    res.status(500).json({ error: "Error navegando" });
+    res.status(200).json({ ok: false, error: e?.message || "Error navegando" });
   }
 });
 
@@ -365,7 +422,7 @@ app.get("/api/browser/screenshot", async (req, res) => {
     res.json({ ok: true, screenshotBase64: shot });
   } catch (e) {
     console.error("browser/screenshot", e);
-    res.status(500).json({ error: "Error screenshot" });
+    res.status(200).json({ ok: false, error: e?.message || "Error screenshot" });
   }
 });
 
@@ -381,7 +438,7 @@ app.post("/api/browser/click", async (req, res) => {
     res.json({ ok: true, screenshotBase64: shot });
   } catch (e) {
     console.error("browser/click", e);
-    res.status(500).json({ error: "Error click" });
+    res.status(200).json({ ok: false, error: e?.message || "Error click" });
   }
 });
 
@@ -397,7 +454,7 @@ app.post("/api/browser/type", async (req, res) => {
     res.json({ ok: true, screenshotBase64: shot });
   } catch (e) {
     console.error("browser/type", e);
-    res.status(500).json({ error: "Error type" });
+    res.status(200).json({ ok: false, error: e?.message || "Error type" });
   }
 });
 
@@ -413,7 +470,7 @@ app.post("/api/browser/key", async (req, res) => {
     res.json({ ok: true, screenshotBase64: shot });
   } catch (e) {
     console.error("browser/key", e);
-    res.status(500).json({ error: "Error key" });
+    res.status(200).json({ ok: false, error: e?.message || "Error key" });
   }
 });
 
